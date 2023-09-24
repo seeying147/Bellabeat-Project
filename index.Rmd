@@ -1,0 +1,612 @@
+---
+title: "Bellabeat Smart Device Usage Analysis"
+output: 
+  bookdown::html_document2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Statement of Business Task
+Bellabeat is a high-tech company that manufactures health-focused innovative products for women. Their products include:
+
+* Bellabeat app: provides users with health data related to their activity, sleep, stress, menstrual cycle, and mindfulness habits.
+* Leaf: A tracker worn as a bracelet, necklace, or clip connects to the Bellabeat app to track activity, sleep and stress.
+* Time: A watch that connects to the Bellabeat app to provide insights about the user’s wellness.
+* Spring: A water bottle that tracks daily water intake using smart technology and connects to the Bellabeat app to track hydration levels. 
+
+The main business task is to analyze consumers’ usage of non-Bellabeat smart devices and apply those insights to recommend marketing strategies to Bellabeat.
+
+# Description of Data Sources
+The data was stored in a public repository on the Kaggle platform. It contains personal fitness tracker data from thirty Fitbit users. I downloaded the Möbius data set organized in 18 separate .csv files, and after processing in SQL, I published a different data set on Kaggle.
+
+## Credibility (ROCCC)
+
+* Reliability: Regarding data reliability, the Fitbit Fitness Tracker Data has a small sample size of 33 individuals and is recorded only for two months. Thus, this might lead to sampling bias issues.
+* Originality: The original data set, published on 31/05/2022 by Furberg Robert, Brinton Julia, Keating Michael, and Ortiz Alexa, can still be found on zenodo.org. It rules out concerns about the originality of our data.
+* Comprehensive: All CSV files looked comprehensive apart from null and duplicated observations.
+* Current: The data was recorded between April and May 2016 and contains no recent data.
+* Cited: The Fitbit Tracker data set has seven citations on Google Scholar.
+
+In summary, further analysis using more recent and longer timespan data is needed to represent the population better. However, we will still use this dataset to provide an overview of tracker usage. 
+
+## Privacy
+The dataset does not reveal any personal information of the survey participants. A unique ID represents all survey participants. Hence, data privacy is respected.
+
+# Data Preparation
+Data cleaning and manipulation are performed in MySQL. There are a total of 18 datasets available. We observed that all data from 'dailyIntensities_merged.csv', 'dailyCalories_merged.csv' and 'dailySteps_merged.csv' are already in 'dailyActivity_merged.csv', hence 'dailyActivity_merged.csv' is used. As I am focusing on daily and hourly analysis, I will import the following datasets:
+
+* dailyActivity_merged.csv
+* heartrate_seconds_merged.csv 
+* hourlyCalories_merged.csv 
+* hourlyIntensities_merged.csv 
+* hourlySteps_merged.csv 
+* sleepDay_merge.csv 
+* weigthLog_Info_merged.csv
+
+## Dealing with DATETIME column
+We observed that all files have a 'Date' column, but all fields under that column contain ‘AM’ or ‘PM’. SQL is unable to recognize the datatype as 'DATETIME'. To resolve this issue, it is necessary to import 'DATETIME' as 'STRING'. Then, we will create a new table using **CREATETABLE()** and use **STR_TO_DATE()** to change the data type from **STRING** to **DATETIME**. 
+
+```{r}
+#Run the following code to connect to MySQL database
+library(RMariaDB)
+library(yaml)
+# Load the configuration file
+config <- yaml::read_yaml("C:/Users/Owner/OneDrive - Nanyang Technological University/Documents/config.yml")
+password <- config$database$db_password
+con <- dbConnect(MariaDB(),
+                 user = "root",
+                 password = password,
+                 dbname = "fitbit",
+                 host = "localhost",
+                 port = 3306)
+```
+
+```{sql, connection=con}
+CREATE TABLE daily_activity (
+  SELECT
+	  Id,
+    STR_TO_DATE(ActivityDate, '%m/%d/%Y') AS Date,
+    TotalSteps,
+    TotalDistance,
+    TrackerDistance,
+    LoggedActivitiesDistance,
+    VeryActiveDistance,
+    ModeratelyActiveDistance,
+    LightActiveDistance,
+    SedentaryActiveDistance,
+    VeryActiveMinutes,
+    FairlyActiveMinutes,
+    LightlyActiveMinutes,
+    SedentaryMinutes,
+    Calories
+  FROM dailyactivity_merged
+  ORDER BY Id, Date
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE heartrate AS (
+  SELECT
+    Id,
+    STR_TO_DATE(Time, '%m/%d/%Y %h:%i:%S %p') AS SecondsTime,
+    Value
+  FROM heartrate_seconds_merged
+  ORDER BY Id, SecondsTime
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE intensity_hour AS (
+  SELECT
+    Id,
+    STR_TO_DATE(ActivityHour,'%m/%d/%Y %h:%i:%S %p') AS Date,
+    TotalIntensity,
+    AverageIntensity
+  FROM hourlyintensities_merged
+  ORDER BY Id, Date
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE steps_hour AS (
+  SELECT
+    Id,
+    STR_TO_DATE(ActivityHour,'%m/%d/%Y %h:%i:%S %p') AS Date,
+    StepTotal
+  FROM hourlysteps_merged
+  ORDER BY Id, Date
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE calories_hour AS (
+	SELECT
+		Id,
+        STR_TO_DATE(ActivityHour, '%m/%d/%Y %h:%i:%S %p') AS Date,
+        Calories
+	FROM hourlycalories_merged
+    ORDER BY Id, Date
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE weight AS (
+  SELECT
+    Id,
+    DATE(STR_TO_DATE(Date,'%m/%d/%Y %h:%i:%S %p')) AS Date,
+    WeightKg,
+    BMI
+  FROM weight_info
+  ORDER BY Id, Date
+);
+```
+
+```{sql, connection=con}
+CREATE TABLE sleep AS (
+  SELECT
+    Id,
+    DATE(STR_TO_DATE(SleepDay,'%m/%d/%Y %h:%i:%S %p')) AS Date,
+    TotalSleepRecords,
+    TotalMinutesAsleep,
+    TotalTimeInBed
+  FROM sleepday_merge
+  ORDER BY Id, Date
+);
+```
+
+## Check for duplicate rows
+The following query is performed to check for any duplicate rows in each dataset:
+```{sql, connection=con}
+SELECT
+  (SELECT COUNT(1) FROM (SELECT DISTINCT * FROM sleep) AS derived_table_1) AS distinct_rows,
+  (SELECT COUNT(1) FROM sleep) AS total_rows;
+```
+
+We observed that 'sleepDay_merge.csv' contains 3 duplicate rows. Using **DISTINCT** in the **SELECT** statement, we removed all duplicates and created a new table 'sleep_daily' which will be used for further analysis on daily sleep.
+
+```{sql, connection=con}
+CREATE TABLE sleep_daily AS (
+  SELECT DISTINCT *
+  FROM sleep
+);
+```
+
+## Check for data consistency and comprehensiveness
+### daily_activity
+The data seems to be consistent in daily_activity as there are no null values observed. There are a total of 33 participants by counting the number of DISTINCT Ids. The date records ranged from 04/12/2016 to 05/12/2016.
+
+### sleep_daily
+The date range is consistent with daily_activity. There is also no data error, as all observations show that the total time in bed is more than the total minutes asleep. However, there were only 24 participants who recorded their sleep. Using **COUNT(DISTINCT SleepDate)** to check the number of records for each participant, we observed inconsistent sleep records among the 24 participants. The participant’s records range from 1 day to 31 days.
+
+```{sql, connection=con}
+SELECT
+  Id,
+  COUNT(DISTINCT Date) AS sleep_record
+FROM sleep_daily
+GROUP BY Id
+ORDER BY sleep_record DESC;
+```
+
+### calories_hour, intensity_hour, steps_hour
+The queries below are performed to check for null values in each dataset. Each result shows that there are no null values. All date ranges, and the number of participants in these datasets are also consistent with daily activity.
+
+```{sql, connection=con}
+SELECT Id
+FROM calories_hour
+WHERE Calories IS NULL OR Calories<0;
+```
+
+```{sql, connection=con}
+SELECT Id
+FROM intensity_hour
+WHERE (TotalIntensity IS NULL OR TotalIntensity<0)
+OR (AverageIntensity IS NULL OR AverageIntensity<0);
+```
+
+```{sql, connection=con}
+SELECT Id
+FROM steps_hour
+WHERE StepTotal IS NULL OR StepTotal<0;
+```
+
+### weight
+The date range is consistent with all other datasets, but there are only 8 participants who recorded their weight. Further analysis of the 8 participants will be done in the following section.
+
+# Data Manipulation
+## Hourly Analysis
+To answer the question, "At what time are the average calories, steps and intensity the highest?" a **CTE** is created based on **LEFT JOIN** and columns **Id** and **Date**. We split the day into 'morning',' afternoon',' night' and 'midnight' based on a specific time range. The query below is performed to analyze each participant's average intensity, calories and steps. The condition day= 'night' in the **WHERE** statement is changed to filter the results to 'morning', 'afternoon' and 'midnight'.
+```{sql, connection=con}
+CREATE TABLE p1 (
+SELECT
+	c.Id AS Id,
+    c.Date AS Date,
+    c.Calories,
+    i.TotalIntensity,
+    s.StepTotal,
+    CASE WHEN TIME(c.Date) BETWEEN '00:00:00' AND '05:00:00' THEN 'midnight'
+		WHEN TIME(c.Date) BETWEEN '06:00:00' AND '11:00:00'THEN 'morning'
+		WHEN TIME(c.Date) BETWEEN '12:00:00' AND '17:00:00'THEN 'afternoon'
+		ELSE 'night' END AS day
+FROM calories_hour AS c
+LEFT JOIN steps_hour AS s
+ON c.Id=s.Id
+	AND c.Date=s.Date
+LEFT JOIN intensity_hour AS i
+ON c.Id=i.Id
+	AND c.Date=i.Date
+);
+```
+
+```{sql, connection=con,output.var="midnight_analysis"}
+SELECT 
+  Id,
+  ROUND(SUM(AVG(Calories)) OVER (PARTITION BY Id),2) AS avg_calories,
+  ROUND(SUM(AVG(TotalIntensity)) OVER (PARTITION BY Id),2) AS avg_intensity,
+  ROUND(SUM(AVG(StepTotal)) OVER (PARTITION BY Id),2) AS avg_step,
+  day
+FROM p1
+WHERE day='midnight'
+GROUP BY Id,day;
+```
+
+```{sql, connection=con,output.var="night_analysis"}
+SELECT 
+  Id,
+  ROUND(SUM(AVG(Calories)) OVER (PARTITION BY Id),2) AS avg_calories,
+  ROUND(SUM(AVG(TotalIntensity)) OVER (PARTITION BY Id),2) AS avg_intensity,
+  ROUND(SUM(AVG(StepTotal)) OVER (PARTITION BY Id),2) AS avg_step,
+  day
+FROM p1
+WHERE day='night'
+GROUP BY Id,day;
+```
+
+```{sql, connection=con,output.var="afternoon_analysis"}
+SELECT 
+  Id,
+  ROUND(SUM(AVG(Calories)) OVER (PARTITION BY Id),2) AS avg_calories,
+  ROUND(SUM(AVG(TotalIntensity)) OVER (PARTITION BY Id),2) AS avg_intensity,
+  ROUND(SUM(AVG(StepTotal)) OVER (PARTITION BY Id),2) AS avg_step,
+  day
+FROM p1
+WHERE day='afternoon'
+GROUP BY Id,day;
+```
+
+```{sql, connection=con,output.var="morning_analysis"}
+SELECT 
+  Id,
+  ROUND(SUM(AVG(Calories)) OVER (PARTITION BY Id),2) AS avg_calories,
+  ROUND(SUM(AVG(TotalIntensity)) OVER (PARTITION BY Id),2) AS avg_intensity,
+  ROUND(SUM(AVG(StepTotal)) OVER (PARTITION BY Id),2) AS avg_step,
+  day
+FROM p1
+WHERE day='morning'
+GROUP BY Id,day;
+```
+
+## Weight Analysis
+To compare the weight, BMI, total steps and distance taken among the 8 participants, we perform **LEFT JOIN** based on column Id. Since the weight and BMI in the 'weight' dataset are recorded daily, we create a **CTE** 'w' to calculate each participant's average weight and BMI. A second **CTE** 'act' is created to analyse the total steps and distance among these 8 participants. Then, the weight range is split into "obesity", "overweight", "healthy" and "underweight". According to NHS, 
+
++ BMI below 18.5: underweight range
++ BMI between 18.5 and 24.9: healthy weight range
++ BMI between 25 and 29.9: overweight range
++ BMI 30 or over: obese range
+
+```{sql, connection=con, output.var="weight_analysis"}
+WITH w AS( 
+SELECT
+    Id,
+    ROUND(SUM(AVG(WeightKg)) OVER (PARTITION BY Id),2) AS avg_weight,
+    ROUND(SUM(AVG(BMI)) OVER (PARTITION BY Id),2) AS avg_bmi
+FROM weight
+GROUP BY Id
+ORDER BY avg_weight DESC),
+
+act AS(
+    SELECT
+        Id,
+        ROUND(SUM(AVG(TotalSteps)) OVER (PARTITION BY Id),2) AS step,
+        ROUND(SUM(AVG(TotalDistance)) OVER (PARTITION BY Id),2) AS dist
+    FROM daily_activity
+    GROUP BY Id)
+
+SELECT 
+    w.Id,
+    w.avg_weight,
+    w.avg_bmi,
+    act.step,
+    act.dist,
+    CASE WHEN w.avg_bmi>=30 THEN 'obesity'
+        WHEN w.avg_bmi BETWEEN 25 AND 29.99 THEN 'overweight'
+        WHEN w.avg_bmi BETWEEN 18.5 AND 24.99 THEN 'healthy'
+        ELSE 'underweight' END AS weight_range
+FROM w
+LEFT JOIN act
+ON w.Id=act.Id
+ORDER BY act.step DESC;
+```
+
+## Daily Activity Analysis
+Based on the average number of steps, the participants fall under these categories: “sedentary_active”, “lightly_active”, “moderately_active” and “very_active”. The classification divides the whole sample into 4 groups:
+
++ Sedentary active: Less than 5000 steps
++ Lightly active: 5000 to 7499 steps
++ Moderately active: 7500 to 9999 steps
++ Very active: Above 10000 steps
+
+**DAYOFWEEK(Date)** is used to analyze the active level of participants each day.
+```{sql, connection=con, output.var="active_analysis"}
+SELECT 
+  Id,
+  AVG(Calories) AS avg_calories,
+  AVG(TotalSteps) AS avg_step,
+  AVG(TotalDistance) AS avg_dist,
+  DAYOFWEEK(Date) AS dayofweek,
+  CASE WHEN AVG(TotalSteps)<5000 THEN 'sedentary_active'
+	  WHEN AVG(TotalSteps) BETWEEN 5000 AND 7499 THEN 'lightly_active'
+	  WHEN AVG(TotalSteps) BETWEEN 7500 AND 9999 THEN 'moderately_active'
+	  ELSE 'very_active' END AS active_level
+FROM daily_activity
+GROUP BY Id, dayofweek
+ORDER BY Id,dayofweek;
+```
+
+## Sleep Analysis
+According to National Institutes of Health,
+
++ Insufficient sleep: less than 7 hours of sleep
++ Sufficient sleep: 7-8 hours of sleep
++ Over sufficient sleep: more than 8 hours of sleep
+
+To analyze the proportion of participants having “insufficient”, “sufficient” or “over sufficient” sleep, a **CTE** “sleep” is created to calculate the average hours of sleep each day and the average hours spent in bed among 24 participants. Based on the conditions above, **CASE WHEN()** is used to determine participants' sleep sufficiency.
+
+```{sql, connection=con, output.var="sleep_analysis"}
+WITH avgsleep AS(
+SELECT 
+  Id,
+  COUNT(DISTINCT Date) AS total_records,
+  ROUND(SUM(TotalMinutesAsleep/60)/COUNT(DISTINCT Date),2) AS avghours_sleep,
+  ROUND(SUM(TotalTimeInBed/60)/COUNT(DISTINCT Date),2) AS avghours_bed
+FROM sleep_daily
+GROUP BY Id
+ORDER BY total_records DESC)
+
+SELECT 
+  avgsleep.Id,
+  avgsleep.total_records,
+  avgsleep.avghours_sleep,
+  avgsleep.avghours_bed,
+  CASE WHEN avgsleep.avghours_sleep<7 THEN 'insufficient'
+    WHEN avgsleep.avghours_sleep>=9 THEN 'oversufficient'
+    ELSE 'sufficient' END AS sleep_sufficiency
+FROM avgsleep
+ORDER BY avgsleep.total_records DESC;
+```
+
+In order to examine the sleep patterns of users on weekends vs weekdays, we add a condition using **CASE WHEN()** to determine whether the date falls under weekday or weekend. The average sleep duration is compared to analyze whether there is a difference in participants' sleep habits.
+
+```{sql, connection=con, output.var="sleepday_analysis"}
+SELECT
+  CASE WHEN DAYOFWEEK(Date) IN (2,3,4,5,6) THEN "weekday"
+	ELSE "weekend" END AS dayofweek,
+  AVG(ROUND(TotalMinutesAsleep/60,2)) AS avghours_sleep
+FROM sleep_daily
+GROUP BY dayofweek;
+```
+
+# Data Visualization
+We perform data visualization in R. We import each SQL results in Chapter 4 into R studio. In R Studio, we need to import the following libraries:
+
+```{r}
+library(dplyr)
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+library(scales)
+library(gridExtra)
+```
+
+## Graphical analysis of hourly activity
+To answer the question “At what time are the average calories, steps and intensity the highest?”, we group the time of day into “morning”, “afternoon”, “night”, and “midnight”. The 4 data sets are bound together using rbind(), and the time of day is then converted to factor levels.
+
+The box plots of average calories, steps and intensity are illustrated below. The highest average calories, steps and intensity occur in the afternoon, while the lowest number is observed at midnight. As participants are asleep at midnight, this can explain their low activity level.
+```{r}
+#bind morning,afternoon,night and midnight data sets together
+df<-rbind(midnight_analysis,morning_analysis) 
+df1<-rbind(df,afternoon_analysis)
+df2<-rbind(df1,night_analysis)
+df2$day<-factor(df2$day,levels=c("morning","afternoon","night","midnight"))
+str(df2)
+```
+
+```{r gg-oz-plot,fig.cap="Box plot of average calories",fig.align='center'}
+#boxplot the time analysis for average calories,intensity and step per day
+df2 %>% ggplot(aes(x=day,y=avg_calories))+geom_boxplot()
+```
+
+```{r gg-oz-plot1,fig.cap="Box plot of average intensities",fig.align='center'}
+df2 %>% ggplot(aes(x=day,y=avg_intensity))+geom_boxplot()
+```
+
+```{r gg-oz-plot2,fig.cap="Box plot of average steps",fig.align='center'}
+df2 %>% ggplot(aes(x=day,y=avg_step))+geom_boxplot()
+```
+
+## Graphical analysis of weight
+The following code finds the distribution of weight range. The distribution of weight is represented by a pie chart below.
+```{r}
+#Convert weight_range to factor levels
+weight_analysis$weight_range<-factor(weight_analysis$weight_range,levels=c("healthy","overweight","obesity"))
+str(weight_analysis)
+```
+
+```{r}
+#Find the distribution of weight range
+summary_weight<- weight_analysis %>% 
+  group_by(weight_range=weight_analysis$weight_range) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(percentage= percent(n/sum(n)))
+
+#Visualize the distribution in pie chart
+ggplot(summary_weight,aes(x="",y=percentage,fill=weight_range))+
+  geom_col()+
+  geom_text(aes(label=percentage),
+            position=position_stack(vjust=0.5),)+
+  coord_polar(theta="y")+
+  theme_void()+
+  labs(title="Representation of distribution of participant's weight")
+```
+
++ **Active level performance**
+
+We will use a bar chart to visualize the average steps achieved by the 8 participants.
+```{r gg-oz-plot3,fig.cap="Average steps among 8 participants",fig.align='center'}
+weight_analysis$Id<-as.numeric(weight_analysis$Id)
+#Analysis on the participants active performance
+ggplot(weight_analysis,aes(fill=weight_range,y=step,x=Id))+
+  geom_hline(yintercept = 5000, linewidth = 1.5, color = "red", group = 1)+
+  geom_hline(yintercept = 10000, linewidth = 1.5, color = "green", group = 1)+
+  geom_bar(position="dodge",stat="identity")
+```
+
+Figure \@ref(fig:gg-oz-plot3) shows that all overweight and healthy participants hit the minimum 5000 steps goal. The obese participant achieves the lowest number of steps. Among the participants, only one healthy and one overweight participant hit an average of 10,000 steps daily. Thus, measures are needed to encourage participants to adopt a more active lifestyle.
+
+## Graphical analysis of sleep
+To analyze participants’ sleep patterns, we focus on categorizing users based on their average sleep duration each day.
+```{r}
+#Convert sleep_sufficiency into factor levels
+sleep_analysis$sleep_sufficiency<-factor(sleep_analysis$sleep_sufficiency,levels=c("insufficient","sufficient","oversufficient"))
+
+#group and count participants according to their sleep sufficiency 
+summary_sleep<- sleep_analysis %>% 
+  group_by(sleep=sleep_analysis$sleep_sufficiency) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(percentage= percent(n/sum(n)))
+
+#Visualize in pie chart
+ggplot(summary_sleep,aes(x="",y=percentage,fill=sleep))+
+  geom_col()+
+  geom_text(aes(label=percentage),
+            position=position_stack(vjust=0.5),)+
+  coord_polar(theta="y")+
+  theme_void()+
+  labs(title="Representation of sleep")
+```
+
+Among 24 participants, 42% of them have sufficient sleep duration. However, 54% of them do not have an adequate amount of sleep. Thus, this highlights the prevalence of insufficient sleep among the analyzed participants.
+
++ **Sleep performance throughout the week**
+
+To visualize participants' sleep duration on weekdays and weekends, we will use a bar chart for comparison. Based on the bar chart, there is a slight difference in sleep duration between weekdays and weekends. It suggests that participants can catch up on sleep or follow a different sleep routine during weekends, resulting in slightly longer sleep duration.
+```{r gg-oz-plot4,fig.align='center'}
+#total sleep duration on weekdays and weekends
+ggplot(sleepday_analysis, aes(x =dayofweek,y=avghours_sleep,fill=dayofweek))+
+  geom_bar(stat="identity")+
+  theme(legend.position="none")
+```
+
++ **Relationship between time in bed and time asleep**
+
+We create a scatter plot to test our hypothesis on whether there is a correlation between time in bed and time asleep.
+```{r gg-oz-plot5, fig.cap="Scatter Plot between avghours_sleep and avghours_bed ",fig.align='center'}
+ggplot(sleep_analysis,aes(x=avghours_sleep,y=avghours_bed))+geom_point()+geom_smooth()+geom_jitter()
+```
+
+The scatter plot (See Figure \@ref(fig:gg-oz-plot5)) shows that there is a strong positive correlation between the two variables. As participants spend more time in bed, their sleep duration increases.
+
++ **Relationship between sleep records and sleep duration**
+
+We also test our hypothesis on the relationship between the total number of sleep records and the average sleep duration. From Figure \@ref(fig:gg-oz-plot6), one surprising observation is that as participants record their sleep records more frequently, they tend to sleep longer. It suggests that those who use the device more regularly have better sleep quality.
+```{r gg-oz-plot6, fig.cap="Scatter Plot between total_records and avghours_sleep",fig.align='center'}
+sleep_analysis$total_records<-as.numeric(sleep_analysis$total_records)
+ggplot(sleep_analysis,aes(x=total_records,y=avghours_sleep))+geom_point()+geom_smooth()+geom_jitter()
+```
+
+## Graphical Analysis of daily activity
+The distribution of active_level among the population is represented by a pie chart.
+```{r}
+#Convert active level range to factor levels
+active_analysis$active_level<-factor(active_analysis$active_level,levels=c("sedentary_active","lightly_active","moderately_active","very_active"))
+#Convert day of week to factor levels
+active_analysis$dayofweek<-factor(active_analysis$dayofweek,levels=c("1","2","3","4","5","6","7"))
+
+#Group and count the number of participants based on their active level
+summary_active<- active_analysis %>% 
+  group_by(active_range=active_analysis$active_level) %>% 
+  count() %>% 
+  ungroup() %>% 
+  mutate(percentage= percent(n/sum(n)))
+
+#Visualize in pie chart
+ggplot(summary_active,aes(x="",y=percentage,fill=active_range))+
+  geom_col()+
+  geom_text(aes(label=percentage),
+            position=position_stack(vjust=0.5),)+
+  coord_polar(theta="y")+
+  theme_void()+
+  labs(title="Representation of distribution of active level")
+```
+
+The result shows that the biggest group are those who take more than 10000 steps and represent the very_active group. The sedentary represents the second biggest group, with 26.3% of the population, followed by the lightly_active group, which constitutes 25%. The moderately_active individuals represent the smallest group with a little more than 20% over the total. The large percentage of the population who lived a sedentary lifestyle is alarming as this can have significant long-term impacts on one physical and mental well-being. Thus, more measures are needed to encourage users to achieve the recommended total daily steps.
+
++ **Daily activity performance throughout the week**
+
+We analyze the average steps taken throughout the week in a grouped bar chart.
+```{r gg-oz-plot7, fig.cap="average steps throughout the week",fig.align='center'}
+#Visualize average steps throughout the week
+ggplot(active_analysis,aes(fill=active_level,y=avg_step,x=dayofweek))+
+  geom_hline(yintercept = 5000, linewidth = 1.5, color = "red", group = 1)+
+  geom_hline(yintercept = 10000, linewidth = 1.5, color = "green", group = 1)+
+  geom_bar(position="dodge",stat="identity")
+```
+
+Based on the bar chart (See Figure \@ref(fig:gg-oz-plot7)), for very active participants, they perform best on Saturday. Moderately active and lightly active participants are relatively constant throughout the week, with better performance on Friday. Sedentary active participants do not hit the minimum goal of 5000 steps on any of the weekdays and tend to record fewer steps on weekdays.
+
++ **Relationships between calories, distance and steps**
+
+Both the numerical measure and visualization of the relationships between any pair of variables (See Figure \@ref(fig:gg-oz-plot8)) show that average_step and avg_distance are highly and linearly related, followed by the relationships between average_calories and average_distance, average calories and average_steps.
+
+```{r gg-oz-plot8, fig.cap="correlation between calories, distance and steps",fig.align='center'}
+#correlation between calories, distance and steps
+panel.cor <- function(x, y, digits = 2, prefix = "", cex.cor, ...) {
+  usr <- par("usr")
+  on.exit(par(usr))
+  par(usr = c(0, 1, 0, 1))
+  Cor <- abs(cor(x, y)) # Remove abs function if desired
+  txt <- paste0(prefix, format(c(Cor, 0.123456789), digits = digits)[1])
+  if(missing(cex.cor)) {
+    cex.cor <- 0.4 / strwidth(txt)
+  }
+  text(0.5, 0.5, txt,
+       cex = 1 + cex.cor * Cor) # Resize the text by level of correlation
+}
+pairs(~avg_calories+avg_step+avg_dist,data=active_analysis,upper.panel=panel.cor,lower.panel=panel.smooth)
+```
+
+# Conclusion
+The key insights in Chapter 5 can be summarized below:
+
+1. Participants are more active in the morning and afternoon.
+2. Majority of the participants fall under the unhealthy weight range.
+3. Participants sleep more during the weekend.
+4. Regular usage of smart device for sleep record lead to improve sleep quality.
+5. Majority of participants are sedentary and lightly active.
+
+Based on those insights, these are the recommendations with our stakeholders:
+
++ **Target Audience**
+
+The weight analysis result shows that most are overweight but willing to pursue an active lifestyle. Although this only represents 8 participants, it suggests that Bellabeat's sales strategy can focus on helping plus-size women across all age groups achieve their lifestyle goals.
+
++ **Increased device engagement**
+
+Since a significant proportion of participants are sedentary and lightly active, there is a need to implement gamification elements in the Bellabeat app to encourage more people to be active. An example is a Step Master Challenge, which is held monthly, whereby global participants compete for the highest number of steps. Participants are grouped based on their gender and have to accumulate at least 30 minutes of Moderate to Vigorous Physical Activities(MVPA) daily, which can be measured according to their heart rate. We recommend that the prizes can include Bellabeat products or vouchers. It not only helps to promote the company product, but it can also boost Bellabeat sales.
+
++ **Commercials**
+
+One surprising result from the sleep analysis is that increased device usage for sleep records may lead to better sleep quality. Further research is still needed to support this result. However, this can be one of the selling points in commercials to encourage those with sleep deprivation to purchase Bellabeat products. As the Leaf Tracker can be worn as a bracelet, necklace or clip, Bellabeat should also focus on this physical feature as the next selling point in their commercials. Moreover, as participants are more active in the morning and afternoon, Bellabeat ads can be broadcast before breakfast and noon.
