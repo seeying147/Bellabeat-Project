@@ -7,7 +7,7 @@ Bellabeat is a high-tech company that manufactures health-focused smart products
 * Data Manipulation
 * Data Visualization
 
-For full documentation, view [here](https://seeying147.github.io/Bellabeat-Analysis/).
+For full documentation, view [here](https://seeying147.github.io/Bellabeat-Project/).
 
 ## Dataset
 The dataset was obtained from the online data science platform Kaggle titled “[FitBit Fitness Tracker Data](https://www.kaggle.com/datasets/arashnic/fitbit)". It contains personal fitness tracker data from 30 fitbit users between 03/12/2016 and 05/12/2016. The original dataset is organized in 18 separate .csv files but we will only use the following 7 .csv files for analysis:
